@@ -138,4 +138,5 @@ When a server is connected, you can use the server's tools via the `use_mcp_tool
 
 While MCP servers can provide additional tools and resources, they are not always required. You can still perform a wide range of tasks without connecting to an MCP server. However, when you need additional capabilities or access to specific resources, connecting to an MCP server can greatly enhance your functionality.
 
+
 """
