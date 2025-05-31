@@ -1,13 +1,13 @@
 import click
 
-from cli.commands.init import init
-from cli.commands.chat.chat import chat
-from cli.commands.chat.list import list_chats
-from cli.commands.chat.share import share
-from cli.commands.bot import bot_group
-from cli.commands.mcp import mcp_group
-from cli.commands.prompt import prompt_group
-from cli.commands.daemon import daemon_group
+from ycli.commands.init import init
+from ycli.commands.chat.chat import chat
+from ycli.commands.chat.list import list_chats
+from ycli.commands.chat.share import share
+from ycli.commands.bot import bot_group
+from ycli.commands.mcp import mcp_group
+from ycli.commands.prompt import prompt_group
+from ycli.commands.daemon import daemon_group
 from config import bot_service
 
 @click.group()

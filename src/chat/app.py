@@ -4,8 +4,8 @@ import asyncio
 from typing import Optional
 
 from .repository.factory import get_chat_repository
-from cli.display_manager import DisplayManager
-from cli.input_manager import InputManager
+from ycli.display_manager import DisplayManager
+from ycli.input_manager import InputManager
 from mcp_server.mcp_manager import MCPManager
 from .provider.base_provider import BaseProvider
 from .provider.openai_format_provider import OpenAIFormatProvider

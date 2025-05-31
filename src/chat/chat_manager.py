@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from chat.models import Chat, Message
 from .repository import ChatRepository
 from .service import ChatService
-from cli.display_manager import DisplayManager
-from cli.input_manager import InputManager
+from ycli.display_manager import DisplayManager
+from ycli.input_manager import InputManager
 from mcp_server.mcp_manager import MCPManager
 from prompt.preset import time_prompt
 from util import generate_id

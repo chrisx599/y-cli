@@ -129,7 +129,8 @@ class MCPDaemonClient:
                 while True:
                     try:
                         # Set a reasonable timeout for each chunk
-                        chunk = await asyncio.wait_for(reader.read(buffer_size), timeout=10.0)
+                        # chunk = await asyncio.wait_for(reader.read(buffer_size), timeout=10.0)
+                        chunk = await asyncio.wait_for(reader.read(buffer_size), timeout=3600.0)
                         if not chunk:  # EOF reached
                             break
                         buffer.extend(chunk)

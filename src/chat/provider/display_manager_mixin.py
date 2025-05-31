@@ -1,4 +1,4 @@
-from cli.display_manager import DisplayManager
+from ycli.display_manager import DisplayManager
 
 class DisplayManagerMixin:
     """Mixin class to handle display manager functionality."""

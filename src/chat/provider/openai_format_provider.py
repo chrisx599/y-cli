@@ -18,6 +18,42 @@ class OpenAIFormatProvider(BaseProvider, DisplayManagerMixin):
         DisplayManagerMixin.__init__(self)
         self.bot_config = bot_config
 
+    def is_anthropic_model(self) -> bool:
+        """Check if the current model is an Anthropic model.
+        
+        Returns:
+            bool: True if it's an Anthropic model
+        """
+        anthropic_models = ['claude-3', 'claude-2', 'claude-instant', 'claude-4', 'claude']
+        return any(model_name in self.bot_config.model.lower() for model_name in anthropic_models)
+    
+    def prepare_messages_for_anthropic(self, messages: List[Message], system_prompt: Optional[str] = None) -> Tuple[List[Dict], Optional[str]]:
+        """Prepare messages for Anthropic API format.
+        
+        Args:
+            messages: Original list of Message objects
+            system_prompt: Optional system message
+            
+        Returns:
+            Tuple[List[Dict], Optional[str]]: Messages list and system prompt
+        """
+        prepared_messages = []
+        
+        # For Anthropic, system message is handled separately
+        for msg in messages:
+            msg_dict = msg.to_dict()
+            if isinstance(msg_dict["content"], list):
+                msg_dict["content"] = [dict(part) for part in msg_dict["content"]]
+            # Remove timestamp fields
+            msg_dict.pop("timestamp", None)
+            msg_dict.pop("unix_timestamp", None)
+            
+            # Skip system messages as they're handled separately in Anthropic API
+            if msg_dict["role"] != "system":
+                prepared_messages.append(msg_dict)
+        
+        return prepared_messages, system_prompt
+
     def prepare_messages_for_completion(self, messages: List[Message], system_prompt: Optional[str] = None) -> List[Dict]:
         """Prepare messages for completion by adding system message and cache_control.
 
@@ -74,7 +110,7 @@ class OpenAIFormatProvider(BaseProvider, DisplayManagerMixin):
         return prepared_messages
 
     async def call_chat_completions(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None) -> Tuple[Message, Optional[str]]:
-        """Get a streaming chat response from OpenRouter.
+        """Get a streaming chat response from OpenRouter or Anthropic.
 
         Args:
             messages: List of Message objects
@@ -85,6 +121,105 @@ class OpenAIFormatProvider(BaseProvider, DisplayManagerMixin):
 
         Raises:
             Exception: If API call fails
+        """
+        # Check if using Anthropic model
+        if self.is_anthropic_model():
+            return await self._call_anthropic_api(messages, chat, system_prompt)
+        else:
+            return await self._call_openai_format_api(messages, chat, system_prompt)
+    
+    async def _call_anthropic_api(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None) -> Tuple[Message, Optional[str]]:
+        """Call Anthropic's official API.
+        
+        Args:
+            messages: List of Message objects
+            system_prompt: Optional system prompt
+            
+        Returns:
+            Message: The assistant's response message
+        """
+        # Prepare messages for Anthropic format
+        prepared_messages, anthropic_system = self.prepare_messages_for_anthropic(messages, system_prompt)
+        
+        body = {
+            "model": self.bot_config.model,
+            "messages": prepared_messages,
+            "stream": True
+        }
+        
+        # Add system prompt if provided
+        if anthropic_system:
+            body["system"] = anthropic_system
+            
+        # Add max_tokens (required for Anthropic)
+        body["max_tokens"] = self.bot_config.max_tokens if self.bot_config.max_tokens else 4096
+        
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.bot_config.base_url or "https://api.anthropic.com",
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    self.bot_config.custom_api_path if self.bot_config.custom_api_path else "/v1/messages",
+                    headers={
+                        "x-api-key": self.bot_config.api_key,
+                        "Content-Type": "application/json",
+                        "anthropic-version": "2023-06-01",
+                    },
+                    json=body,
+                    timeout=60.0
+                ) as response:
+                    response.raise_for_status()
+
+                    if not self.display_manager:
+                        raise Exception("Display manager not set for streaming response")
+
+                    async def generate_chunks():
+                        async for chunk in response.aiter_lines():
+                            if chunk.startswith("data: "):
+                                try:
+                                    data = json.loads(chunk[6:])
+                                    if data.get("type") == "content_block_delta":
+                                        delta = data.get("delta", {})
+                                        content = delta.get("text")
+                                        if content is not None:
+                                            chunk_data = SimpleNamespace(
+                                                choices=[SimpleNamespace(
+                                                    delta=SimpleNamespace(content=content, reasoning_content=None)
+                                                )],
+                                                model=self.bot_config.model,
+                                                provider="anthropic"
+                                            )
+                                            yield chunk_data
+                                except json.JSONDecodeError:
+                                    continue
+                    
+                    content_full, reasoning_content_full = await self.display_manager.stream_response(generate_chunks())
+                    
+                    # Build assistant message
+                    assistant_message = create_message(
+                        "assistant",
+                        content_full,
+                        reasoning_content=reasoning_content_full,
+                        provider="anthropic",
+                        model=self.bot_config.model
+                    )
+                    return assistant_message, None
+                    
+        except httpx.HTTPError as e:
+            raise Exception(f"HTTP error getting Anthropic response: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Error getting Anthropic response: {str(e)}")
+    
+    async def _call_openai_format_api(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None) -> Tuple[Message, Optional[str]]:
+        """Call OpenAI format API (OpenRouter, etc.).
+        
+        Args:
+            messages: List of Message objects
+            system_prompt: Optional system prompt to add at the start
+
+        Returns:
+            Message: The assistant's response message
         """
         # Prepare messages with cache_control and system message
         prepared_messages = self.prepare_messages_for_completion(messages, system_prompt)

@@ -5,7 +5,7 @@ from typing import Optional
 from rich.console import Console
 
 from chat.app import ChatApp
-from cli.display_manager import custom_theme
+from ycli.display_manager import custom_theme
 from config import bot_service
 from loguru import logger
 
