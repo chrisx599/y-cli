@@ -295,7 +295,7 @@ class ChatManager:
                             system_prompt_parts.append(prompt_config.content)
         
 
-        if self.bot_config.mcp_servers:
+        if self.bot_config.mcp_servers and self.current_mode == "act":
             await self.mcp_manager.connect_to_servers(self.bot_config.mcp_servers)
             mcp_prompt = await self.mcp_manager.get_mcp_prompt(self.bot_config.mcp_servers, prompt_service) + "\n"
             system_prompt_parts.append(mcp_prompt)
