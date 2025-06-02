@@ -3,8 +3,8 @@ from contextlib import AsyncExitStack
 from types import SimpleNamespace
 
 from chat.models import Chat, Message
-from chat.service import ChatService
-from chat.repository import ChatRepository
+from .repository import ChatRepository
+from .service import ChatService
 from ycli.display_manager import DisplayManager
 from ycli.input_manager import InputManager
 from mcp_server.mcp_manager import MCPManager
@@ -44,14 +44,12 @@ class ChatManager:
         """
         self.service = ChatService(repository)
         self.bot_config = bot_config
-        self.plan_model = bot_config.plan_model if bot_config.plan_model else bot_config.model
-        self.act_model = bot_config.act_model if bot_config.act_model else bot_config.model
+        self.model = bot_config.model
         self.display_manager = display_manager
         self.input_manager = input_manager
         self.mcp_manager = mcp_manager
         self.provider = provider
         self.verbose = verbose
-        self.is_plan_mode = False # New flag for plan mode
 
         # Set up cross-manager references
         self.provider.set_display_manager(display_manager)
@@ -113,15 +111,11 @@ class ChatManager:
                 return False
             self.display_manager.console.print("[yellow]Please answer 'y' or 'n'[/yellow]")
 
-    async def process_user_message(self, user_message: Message, model_override: Optional[str] = None):
+    async def process_user_message(self, user_message: Message):
         self.messages.append(user_message)
         self.display_manager.display_message_panel(user_message, index=len(self.messages) - 1)
 
-        model_to_use = model_override if model_override else self.act_model # Default to act_model
-
-        assistant_message, external_id = await self.provider.call_chat_completions(
-            self.messages, self.current_chat, self.system_prompt, model=model_to_use
-        )
+        assistant_message, external_id = await self.provider.call_chat_completions(self.messages, self.current_chat, self.system_prompt)
         if external_id:
             self.external_id = external_id
         await self.process_assistant_message(assistant_message)
@@ -231,20 +225,6 @@ class ChatManager:
                         self.display_manager.console.print("\n[yellow]Goodbye![/yellow]")
                         break
 
-                    if user_input.lower() == '/plan':
-                        self.is_plan_mode = True
-                        self.display_manager.console.print("[green]Switched to PLAN mode. Next message will generate a plan.[/green]")
-                        continue
-                    elif user_input.lower() == '/act':
-                        self.is_plan_mode = False
-                        self.display_manager.console.print("[green]Switched to ACT mode. Next message will generate an action.[/green]")
-                        continue
-                    elif user_input.lower() == '/toggle_mode':
-                        self.is_plan_mode = not self.is_plan_mode
-                        mode_status = "PLAN" if self.is_plan_mode else "ACT"
-                        self.display_manager.console.print(f"[green]Switched to {mode_status} mode.[/green]")
-                        continue
-
                     if not user_input:
                         self.display_manager.console.print("[yellow]Please enter a message.[/yellow]")
                         continue
@@ -262,13 +242,7 @@ class ChatManager:
 
                     self.display_manager.clear_lines(line_count)
 
-                    if self.is_plan_mode:
-                        self.display_manager.console.print("[yellow]Generating plan...[/yellow]")
-                        await self.process_user_message(user_message, model_override=self.plan_model)
-                        self.is_plan_mode = False # Switch back to act mode after planning
-                        self.display_manager.console.print("[green]Plan generated. Switched to ACT mode.[/green]")
-                    else:
-                        await self.process_user_message(user_message, model_override=self.act_model)
+                    await self.process_user_message(user_message)
 
             except (KeyboardInterrupt, EOFError):
                 self.display_manager.console.print("\n[yellow]Chat interrupted. Exiting...[/yellow]")

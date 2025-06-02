@@ -25,14 +25,28 @@ limitations under the License.
 """
 mcp_prompt = """
 ====
-INITIAL TASK PLANNING
 
-Before attempting to solve any task, you MUST first formulate a detailed plan. This plan should clearly outline the steps you intend to take, the specific tools you will use for each step, and the rationale behind your tool choices. Break down complex tasks into smaller, manageable sub-tasks. Once you have a clear and comprehensive plan, you can proceed with executing the tools step-by-step.
-
-====
 TOOL USE
 
 You have access to a set of tools that are executed upon the user's approval. You can use one tool per message, and will receive the result of that tool use in the user's response. You use tools step-by-step to accomplish a given task, with each tool use informed by the result of the previous tool use.
+
+# Tool Use Formatting
+
+Tool use is formatted using XML-style tags. The tool name is enclosed in opening and closing tags, and each parameter is similarly enclosed within its own set of tags. Here's the structure:
+
+<tool_name>
+<parameter1_name>value1</parameter1_name>
+<parameter2_name>value2</parameter2_name>
+...
+</tool_name>
+
+For example:
+
+<read_file>
+<path>src/main.js</path>
+</read_file>
+
+Always adhere to this format for the tool use to ensure proper parsing and execution.
 
 # Tools
 ## use_mcp_tool
@@ -119,10 +133,6 @@ The Model Context Protocol (MCP) enables communication between the system and lo
 # Connected MCP Servers
 
 When a server is connected, you can use the server's tools via the `use_mcp_tool` tool, and access the server's resources via the `access_mcp_resource` tool.
-
-# Available MCP Servers and Capabilities
-
-MCP servers provide a wide range of capabilities, including image generation, video editing, video generation, video tracking, and video understanding. You can use these tools to perform tasks such as generating images from text, editing videos, creating videos from text or images, tracking objects in videos, and analyzing visual content.
 
 # MCP Servers Are Not Always Necessary
 
