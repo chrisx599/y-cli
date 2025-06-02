@@ -44,12 +44,16 @@ class ChatManager:
         """
         self.service = ChatService(repository)
         self.bot_config = bot_config
-        self.model = bot_config.model
         self.display_manager = display_manager
         self.input_manager = input_manager
         self.mcp_manager = mcp_manager
         self.provider = provider
         self.verbose = verbose
+
+        self.plan_model_config = bot_config.plan_model_config if bot_config.plan_model_config is not None else {}
+        self.act_model_config = bot_config.act_model_config if bot_config.act_model_config is not None else {}
+        self.current_mode = "plan"  # Default to plan mode
+        self.model = bot_config.model # Keep for backward compatibility if needed
 
         # Set up cross-manager references
         self.provider.set_display_manager(display_manager)
@@ -68,6 +72,14 @@ class ChatManager:
             self.continue_exist = True
         else:
             self.chat_id = generate_id()
+
+    def set_mode(self, mode: str):
+        """Set the current operating mode (plan or act)."""
+        if mode not in ["plan", "act"]:
+            self.display_manager.print_error(f"Invalid mode: {mode}. Mode must be 'plan' or 'act'.")
+            return
+        self.current_mode = mode
+        self.display_manager.console.print(f"[green]Switched to {self.current_mode.upper()} mode.[/green]")
 
     async def _load_chat(self, chat_id: str):
         """Load an existing chat by ID"""
@@ -115,7 +127,10 @@ class ChatManager:
         self.messages.append(user_message)
         self.display_manager.display_message_panel(user_message, index=len(self.messages) - 1)
 
-        assistant_message, external_id = await self.provider.call_chat_completions(self.messages, self.current_chat, self.system_prompt)
+        # Determine which model config to use based on current mode
+        current_model_config = self.plan_model_config if self.current_mode == "plan" else self.act_model_config
+        
+        assistant_message, external_id = await self.provider.call_chat_completions(self.messages, self.current_chat, self.system_prompt, model_config=current_model_config)
         if external_id:
             self.external_id = external_id
         await self.process_assistant_message(assistant_message)
@@ -224,6 +239,14 @@ class ChatManager:
                     if self.input_manager.is_exit_command(user_input):
                         self.display_manager.console.print("\n[yellow]Goodbye![/yellow]")
                         break
+
+                    # Handle mode switching commands
+                    if user_input.lower() == "/plan":
+                        self.set_mode("plan")
+                        continue
+                    if user_input.lower() == "/act":
+                        self.set_mode("act")
+                        continue
 
                     if not user_input:
                         self.display_manager.console.print("[yellow]Please enter a message.[/yellow]")

@@ -20,23 +20,24 @@ class TopiaOrchProvider(BaseProvider, DisplayManagerMixin):
         """
         DisplayManagerMixin.__init__(self)
         self.bot_config = bot_config
-        self.base_url = self.bot_config.base_url
         self.chat_endpoint = "/orchChat/sendChat"
 
-    def _parse_credentials(self):
+    def _parse_credentials(self, api_key: str):
         """Parse app_id and app_secret from api_key"""
-        app_id, app_secret = self.bot_config.api_key.split('|')
+        app_id, app_secret = api_key.split('|')
         return app_id, app_secret
 
-    def _get_token_file_path(self):
-        """Get path to token cache file"""
-        return os.path.join(config.get("tmp_dir"), '.topia_token')
+    def _get_token_file_path(self, api_key_hash: str):
+        """Get path to token cache file based on API key hash"""
+        return os.path.join(config.get("tmp_dir"), f'.topia_token_{api_key_hash}')
 
-    async def _get_cached_token(self):
+    async def _get_cached_token(self, api_key: str):
         """Get token from cache file if valid"""
+        api_key_hash = str(hash(api_key)) # Simple hash for file naming
         try:
-            if os.path.exists(self._get_token_file_path()):
-                with open(self._get_token_file_path(), 'r') as f:
+            token_file_path = self._get_token_file_path(api_key_hash)
+            if os.path.exists(token_file_path):
+                with open(token_file_path, 'r') as f:
                     data = json.load(f)
                     if data['expires_at'] > time.time():
                         return data['access_token']
@@ -44,12 +45,13 @@ class TopiaOrchProvider(BaseProvider, DisplayManagerMixin):
             pass
         return None
 
-    async def _refresh_and_cache_token(self):
+    async def _refresh_and_cache_token(self, base_url: str, api_key: str):
         """Get new token and save to cache"""
-        app_id, app_secret = self._parse_credentials()
+        app_id, app_secret = self._parse_credentials(api_key)
+        api_key_hash = str(hash(api_key)) # Simple hash for file naming
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{self.base_url}/login",
+                f"{base_url}/login",
                 json={"appId": app_id, "appSecret": app_secret}
             )
             data = response.json()['data']
@@ -59,27 +61,27 @@ class TopiaOrchProvider(BaseProvider, DisplayManagerMixin):
                 'access_token': data['access_token'],
                 'expires_at': time.time() + data['expires_in']
             }
-            with open(self._get_token_file_path(), 'w') as f:
+            with open(self._get_token_file_path(api_key_hash), 'w') as f:
                 json.dump(cache_data, f)
 
             return data['access_token']
 
-    async def _get_valid_token(self):
+    async def _get_valid_token(self, base_url: str, api_key: str):
         """Get a valid token, refresh if needed"""
-        token = await self._get_cached_token()
+        token = await self._get_cached_token(api_key)
         if not token:
-            token = await self._refresh_and_cache_token()
+            token = await self._refresh_and_cache_token(base_url, api_key)
         return token
 
-    async def _prepare_headers(self) -> Dict[str, str]:
+    async def _prepare_headers(self, base_url: str, api_key: str) -> Dict[str, str]:
         """Prepare headers for API request."""
-        token = await self._get_valid_token()
+        token = await self._get_valid_token(base_url, api_key)
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json; charset=utf-8",
         }
 
-    def _prepare_request_body(self, messages: List[Message], chat: Optional[Chat] = None) -> Dict[str, Any]:
+    def _prepare_request_body(self, messages: List[Message], chat: Optional[Chat] = None, orch_id: Optional[int] = None) -> Dict[str, Any]:
         """Prepare request body for Topia API."""
         # Get the last user message as content
         user_messages = [msg for msg in messages if msg.role == "user"]
@@ -95,19 +97,20 @@ class TopiaOrchProvider(BaseProvider, DisplayManagerMixin):
         body = {
             "appUserId": app_user_id,
             "content": content,
-            "orchId": int(self.bot_config.model),  # Use model field as orchId
+            "orchId": orch_id,  # Use orch_id from parameter
             "isStream": True  # Always use streaming mode
         }
 
         return body
 
-    async def call_chat_completions(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None) -> Tuple[Message, Optional[str]]:
+    async def call_chat_completions(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None, model_config: Optional[Dict] = None) -> Tuple[Message, Optional[str]]:
         """Get a chat response from Topia.
 
         Args:
             messages: List of Message objects
             chat: Optional Chat object to maintain conversation context
             system_prompt: Optional system prompt (not used in Topia)
+            model_config: Optional dictionary for model-specific configuration
 
         Returns:
             Message: The assistant's response message
@@ -119,12 +122,18 @@ class TopiaOrchProvider(BaseProvider, DisplayManagerMixin):
         if not self.display_manager:
             raise Exception("Display manager not set for streaming response")
 
+        # Use model_config if provided, otherwise fallback to bot_config
+        current_base_url = model_config.get("base_url", self.bot_config.base_url) if model_config else self.bot_config.base_url
+        current_api_key = model_config.get("api_key", self.bot_config.api_key) if model_config else self.bot_config.api_key
+        current_model = model_config.get("model", self.bot_config.model) if model_config else self.bot_config.model
+        current_orch_id = int(current_model) # Topia uses model as orchId
+
         try:
-            headers = await self._prepare_headers()
-            body = self._prepare_request_body(messages, chat)
+            headers = await self._prepare_headers(current_base_url, current_api_key)
+            body = self._prepare_request_body(messages, chat, current_orch_id)
 
             async with httpx.AsyncClient(
-                base_url=self.base_url,
+                base_url=current_base_url,
             ) as client:
                 async with client.stream(
                     "POST",
@@ -170,7 +179,7 @@ class TopiaOrchProvider(BaseProvider, DisplayManagerMixin):
                                                         reasoning_content=None
                                                     )
                                                 )],
-                                                model=self.bot_config.model,
+                                                model=current_model, # Use current_model
                                                 provider="topia"
                                             )
                                             yield chunk_data
@@ -185,7 +194,7 @@ class TopiaOrchProvider(BaseProvider, DisplayManagerMixin):
                         content_full,
                         id=message_id,
                         provider="topia",
-                        model=self.bot_config.model
+                        model=current_model # Use current_model
                     ), None  # Topia doesn't use external_id
 
         except httpx.HTTPError as e:

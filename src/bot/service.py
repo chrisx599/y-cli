@@ -41,6 +41,10 @@ class BotService:
                 config.openrouter_config = DEFAULT_OPENROUTER_CONFIG.copy()
             if config.mcp_servers is None:
                 config.mcp_servers = DEFAULT_MCP_SERVER_CONFIG.copy()
+            if config.plan_model_config is None:
+                config.plan_model_config = {}  # Initialize with empty dict
+            if config.act_model_config is None:
+                config.act_model_config = {}   # Initialize with empty dict
         return self.repository.add_config(config)
 
     def delete_config(self, name: str) -> bool:

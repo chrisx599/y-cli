@@ -73,12 +73,13 @@ class OpenAIFormatProvider(BaseProvider, DisplayManagerMixin):
 
         return prepared_messages
 
-    async def call_chat_completions(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None) -> Tuple[Message, Optional[str]]:
+    async def call_chat_completions(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None, model_config: Optional[Dict] = None) -> Tuple[Message, Optional[str]]:
         """Get a streaming chat response from OpenRouter.
 
         Args:
             messages: List of Message objects
             system_prompt: Optional system prompt to add at the start
+            model_config: Optional dictionary for model-specific configuration
 
         Returns:
             Message: The assistant's response message
@@ -86,32 +87,41 @@ class OpenAIFormatProvider(BaseProvider, DisplayManagerMixin):
         Raises:
             Exception: If API call fails
         """
+        # Use model_config if provided, otherwise fallback to bot_config
+        current_model = model_config.get("model", self.bot_config.model) if model_config else self.bot_config.model
+        current_base_url = model_config.get("base_url", self.bot_config.base_url) if model_config else self.bot_config.base_url
+        current_api_key = model_config.get("api_key", self.bot_config.api_key) if model_config else self.bot_config.api_key
+        current_custom_api_path = model_config.get("custom_api_path", self.bot_config.custom_api_path) if model_config else self.bot_config.custom_api_path
+        current_max_tokens = model_config.get("max_tokens", self.bot_config.max_tokens) if model_config else self.bot_config.max_tokens
+        current_reasoning_effort = model_config.get("reasoning_effort", self.bot_config.reasoning_effort) if model_config else self.bot_config.reasoning_effort
+        current_openrouter_config = model_config.get("openrouter_config", self.bot_config.openrouter_config) if model_config else self.bot_config.openrouter_config
+
         # Prepare messages with cache_control and system message
         prepared_messages = self.prepare_messages_for_completion(messages, system_prompt)
         body = {
-            "model": self.bot_config.model,
+            "model": current_model,
             "messages": prepared_messages,
             "stream": True
         }
-        if "deepseek-r1" in self.bot_config.model:
+        if "deepseek-r1" in current_model:
             body["include_reasoning"] = True
-        if self.bot_config.openrouter_config and "provider" in self.bot_config.openrouter_config:
-            body["provider"] = self.bot_config.openrouter_config["provider"]
-        if self.bot_config.max_tokens:
-            body["max_tokens"] = self.bot_config.max_tokens
-        if self.bot_config.reasoning_effort:
-            body["reasoning_effort"] = self.bot_config.reasoning_effort
+        if current_openrouter_config and "provider" in current_openrouter_config:
+            body["provider"] = current_openrouter_config["provider"]
+        if current_max_tokens:
+            body["max_tokens"] = current_max_tokens
+        if current_reasoning_effort:
+            body["reasoning_effort"] = current_reasoning_effort
         try:
             async with httpx.AsyncClient(
-                base_url=self.bot_config.base_url,
+                base_url=current_base_url,
             ) as client:
                 async with client.stream(
                     "POST",
-                    self.bot_config.custom_api_path if self.bot_config.custom_api_path else "/chat/completions",
+                    current_custom_api_path if current_custom_api_path else "/chat/completions",
                     headers={
                         "HTTP-Referer": "https://luohy15.com",
                         'X-Title': 'y-cli',
-                        "Authorization": f"Bearer {self.bot_config.api_key}",
+                        "Authorization": f"Bearer {current_api_key}",
                         "Content-Type": "application/json",
                     },
                     json=body,
@@ -125,6 +135,8 @@ class OpenAIFormatProvider(BaseProvider, DisplayManagerMixin):
                     # Store provider and model info from first response chunk
                     provider = None
                     model = None
+                    # Use the model from the current_model variable
+                    model = current_model
 
                     async def generate_chunks():
                         nonlocal provider, model

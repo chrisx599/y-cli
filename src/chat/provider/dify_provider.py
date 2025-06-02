@@ -17,16 +17,16 @@ class DifyProvider(BaseProvider, DisplayManagerMixin):
         """
         DisplayManagerMixin.__init__(self)
         self.bot_config = bot_config
-        self.chat_endpoint = self.bot_config.custom_api_path if self.bot_config.custom_api_path else "/chat-messages"
+        # self.chat_endpoint is now determined dynamically in call_chat_completions
 
-    def _prepare_headers(self) -> Dict[str, str]:
+    def _prepare_headers(self, api_key: str) -> Dict[str, str]:
         """Prepare headers for API request."""
         return {
-            "Authorization": f"Bearer {self.bot_config.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
-    def _prepare_request_body(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None) -> Dict[str, Any]:
+    def _prepare_request_body(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None, model: str = None) -> Dict[str, Any]:
         """Prepare request body for Dify API."""
         # Get the last user message as query
         user_messages = [msg for msg in messages if msg.role == "user"]
@@ -49,16 +49,21 @@ class DifyProvider(BaseProvider, DisplayManagerMixin):
         # Add conversation ID if chat has external_id
         if chat and chat.external_id:
             body["conversation_id"] = chat.external_id
+        
+        # Add model if provided
+        if model:
+            body["model"] = model
 
         return body
 
-    async def call_chat_completions(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None) -> Tuple[Message, Optional[str]]:
+    async def call_chat_completions(self, messages: List[Message], chat: Optional[Chat] = None, system_prompt: Optional[str] = None, model_config: Optional[Dict] = None) -> Tuple[Message, Optional[str]]:
         """Get a chat response from Dify.
         
         Args:
             messages: List of Message objects
             chat: Optional Chat object to maintain conversation context
             system_prompt: Optional system prompt to add at the start
+            model_config: Optional dictionary for model-specific configuration
             
         Returns:
             Message: The assistant's response message
@@ -69,16 +74,23 @@ class DifyProvider(BaseProvider, DisplayManagerMixin):
         if not self.display_manager:
             raise Exception("Display manager not set for streaming response")
 
-        headers = self._prepare_headers()
-        body = self._prepare_request_body(messages, chat, system_prompt)
+        # Use model_config if provided, otherwise fallback to bot_config
+        current_base_url = model_config.get("base_url", self.bot_config.base_url) if model_config else self.bot_config.base_url
+        current_api_key = model_config.get("api_key", self.bot_config.api_key) if model_config else self.bot_config.api_key
+        current_custom_api_path = model_config.get("custom_api_path", self.bot_config.custom_api_path) if model_config else self.bot_config.custom_api_path
+        current_model = model_config.get("model", self.bot_config.model) if model_config else self.bot_config.model
+
+        chat_endpoint = current_custom_api_path if current_custom_api_path else "/chat-messages"
+        headers = self._prepare_headers(current_api_key)
+        body = self._prepare_request_body(messages, chat, system_prompt, current_model)
 
         try:
             async with httpx.AsyncClient(
-                base_url=self.bot_config.base_url,
+                base_url=current_base_url,
             ) as client:
                 async with client.stream(
                     "POST",
-                    self.chat_endpoint,
+                    chat_endpoint,
                     headers=headers,
                     json=body,
                     timeout=60.0
@@ -113,7 +125,7 @@ class DifyProvider(BaseProvider, DisplayManagerMixin):
                                                     reasoning_content=None
                                                 )
                                             )],
-                                            model=self.bot_config.model,
+                                            model=current_model, # Use current_model
                                             provider="dify"
                                         )
                                         yield chunk_data
@@ -128,7 +140,7 @@ class DifyProvider(BaseProvider, DisplayManagerMixin):
                         content_full,
                         id=message_id,
                         provider="dify",
-                        model=self.bot_config.model
+                        model=current_model # Use current_model
                     ), conversation_id
 
         except httpx.HTTPError as e:
