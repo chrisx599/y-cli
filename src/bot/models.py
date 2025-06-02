@@ -17,7 +17,9 @@ class BotConfig:
     base_url: str = "https://openrouter.ai/api/v1"
     api_key: str = ""
     api_type: Optional[str] = None
-    model: str = ""
+    model: str = "" # Default model, can be overridden by plan_model/act_model
+    plan_model: Optional[str] = None # Model for planning phase
+    act_model: Optional[str] = None # Model for acting phase
     print_speed: int = None
     description: Optional[str] = None
     openrouter_config: Optional[Dict] = None
