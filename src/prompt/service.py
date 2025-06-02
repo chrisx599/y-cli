@@ -1,5 +1,6 @@
 """Prompt configuration service."""
 
+import os
 from typing import List, Optional
 from .models import PromptConfig
 from .repository import PromptRepository
@@ -71,6 +72,19 @@ class PromptService:
         Returns:
             PromptConfig if found, None otherwise
         """
+        # Check if the name is a file path
+        if os.path.exists(name) and os.path.isfile(name):
+            try:
+                with open(name, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                # Create a PromptConfig on the fly for file paths
+                return PromptConfig(name=os.path.basename(name), content=content, description=f"Loaded from file: {name}")
+            except Exception as e:
+                # Handle file reading errors
+                print(f"Error reading prompt from file {name}: {e}")
+                return None
+        
+        # If not a file path, try to get from repository
         return self.repository.get_config(name)
     
     def add_prompt(self, config: PromptConfig) -> PromptConfig:

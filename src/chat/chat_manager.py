@@ -52,6 +52,8 @@ class ChatManager:
 
         self.plan_model_config = bot_config.plan_model_config if bot_config.plan_model_config is not None else {}
         self.act_model_config = bot_config.act_model_config if bot_config.act_model_config is not None else {}
+        self.plan_prompts = bot_config.plan_prompts # This will be Optional[str]
+        self.act_prompts = bot_config.act_prompts   # This will be Optional[str]
         self.current_mode = "plan"  # Default to plan mode
         self.model = bot_config.model # Keep for backward compatibility if needed
 
@@ -62,7 +64,7 @@ class ChatManager:
         self.current_chat: Optional[Chat] = None
         self.external_id: Optional[str] = None
         self.messages: List[Message] = []
-        self.system_prompt: Optional[str] = None
+        # self.system_prompt will be built dynamically before each call
         self.chat_id: Optional[str] = None
         self.continue_exist = False
 
@@ -130,7 +132,10 @@ class ChatManager:
         # Determine which model config to use based on current mode
         current_model_config = self.plan_model_config if self.current_mode == "plan" else self.act_model_config
         
-        assistant_message, external_id = await self.provider.call_chat_completions(self.messages, self.current_chat, self.system_prompt, model_config=current_model_config)
+        # Build system prompt dynamically before each call
+        system_prompt = await self._build_system_prompt()
+
+        assistant_message, external_id = await self.provider.call_chat_completions(self.messages, self.current_chat, system_prompt, model_config=current_model_config)
         if external_id:
             self.external_id = external_id
         await self.process_assistant_message(assistant_message)
@@ -209,21 +214,9 @@ class ChatManager:
                 if self.verbose:
                     logger.info("Chat loaded successfully")
 
-                # Init basic system prompt
-                self.system_prompt = time_prompt + "\n"
-
-                # Initialize MCP and system prompt if MCP server settings exist
+                # Initialize MCP servers once
                 if self.bot_config.mcp_servers:
                     await self.mcp_manager.connect_to_servers(self.bot_config.mcp_servers)
-                    self.system_prompt += await self.mcp_manager.get_mcp_prompt(self.bot_config.mcp_servers, prompt_service) + "\n"
-
-                # Add additional prompts to system prompt
-                if self.bot_config.prompts:
-                    for prompt in self.bot_config.prompts:
-                        if prompt not in ["mcp"]:
-                            prompt_config = prompt_service.get_prompt(prompt)
-                            if prompt_config:
-                                self.system_prompt += prompt_config.content + "\n"
 
                 if self.verbose:
                     self.display_manager.display_help()
@@ -272,3 +265,39 @@ class ChatManager:
             finally:
                 # Clear sessions on exit
                 self.mcp_manager.clear_sessions()
+
+    async def _build_system_prompt(self) -> str:
+        """Builds the system prompt dynamically based on current mode and configurations."""
+        system_prompt_parts = []
+
+        # Determine the primary prompt based on current mode
+        primary_prompt_name = None
+        if self.current_mode == "plan" and self.plan_prompts:
+            primary_prompt_name = self.plan_prompts
+        elif self.current_mode == "act" and self.act_prompts:
+            primary_prompt_name = self.act_prompts
+        
+        if primary_prompt_name:
+            # If a mode-specific prompt is set, it completely overrides other prompts
+            if primary_prompt_name not in ["mcp"]: # "mcp" is handled separately
+                prompt_config = prompt_service.get_prompt(primary_prompt_name)
+                if prompt_config:
+                    system_prompt_parts.append(prompt_config.content)
+        else:
+            # Fallback to general prompts and default components if no mode-specific prompt is defined
+            system_prompt_parts.append(time_prompt)
+
+            if self.bot_config.prompts:
+                for prompt_name in self.bot_config.prompts:
+                    if prompt_name not in ["mcp"]: # "mcp" is handled separately
+                        prompt_config = prompt_service.get_prompt(prompt_name)
+                        if prompt_config:
+                            system_prompt_parts.append(prompt_config.content)
+        
+
+        if self.bot_config.mcp_servers:
+            await self.mcp_manager.connect_to_servers(self.bot_config.mcp_servers)
+            mcp_prompt = await self.mcp_manager.get_mcp_prompt(self.bot_config.mcp_servers, prompt_service) + "\n"
+            system_prompt_parts.append(mcp_prompt)
+        
+        return "\n".join(system_prompt_parts) + "\n"

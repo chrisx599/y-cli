@@ -45,6 +45,10 @@ class BotService:
                 config.plan_model_config = {}  # Initialize with empty dict
             if config.act_model_config is None:
                 config.act_model_config = {}   # Initialize with empty dict
+            if config.plan_prompts is None:
+                config.plan_prompts = None # Initialize with None
+            if config.act_prompts is None:
+                config.act_prompts = None  # Initialize with None
         return self.repository.add_config(config)
 
     def delete_config(self, name: str) -> bool:
