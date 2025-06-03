@@ -1,6 +1,8 @@
 from typing import List, Dict, Optional
 from contextlib import AsyncExitStack
 from types import SimpleNamespace
+import re
+import json
 
 from chat.models import Chat, Message
 from .repository import ChatRepository
@@ -63,7 +65,8 @@ class ChatManager:
         # Initialize chat state
         self.current_chat: Optional[Chat] = None
         self.external_id: Optional[str] = None
-        self.messages: List[Message] = []
+        self.plan_messages: List[Message] = []
+        self.act_messages: List[Message] = []
         # self.system_prompt will be built dynamically before each call
         self.chat_id: Optional[str] = None
         self.continue_exist = False
@@ -83,6 +86,14 @@ class ChatManager:
         self.current_mode = mode
         self.display_manager.console.print(f"[green]Switched to {self.current_mode.upper()} mode.[/green]")
 
+    @property
+    def messages(self) -> List[Message]:
+        """Returns the message history for the current mode."""
+        if self.current_mode == "plan":
+            return self.plan_messages
+        else:
+            return self.act_messages
+
     async def _load_chat(self, chat_id: str):
         """Load an existing chat by ID"""
         existing_chat = await self.service.get_chat(chat_id)
@@ -90,11 +101,14 @@ class ChatManager:
             self.display_manager.print_error(f"Chat {chat_id} not found")
             raise ValueError(f"Chat {chat_id} not found")
 
-        self.messages = existing_chat.messages
+        # When loading an existing chat, populate the plan_messages with the full history
+        # and clear act_messages. This assumes we always start in plan mode when continuing.
+        self.plan_messages = existing_chat.messages
+        self.act_messages = [] # Clear act messages on load
         self.current_chat = existing_chat
 
         if self.verbose:
-            logger.info(f"Loaded {len(self.messages)} messages from chat {chat_id}")
+            logger.info(f"Loaded {len(self.plan_messages)} messages into plan_messages from chat {chat_id}")
 
     def get_user_confirmation(self, content: str, server_name: str = None, tool_name: str = None) -> bool:
         """Get user confirmation before executing tool use
@@ -142,58 +156,119 @@ class ChatManager:
         await self.persist_chat()
 
     async def process_assistant_message(self, assistant_message: Message):
-        """Process assistant response and handle tool use recursively"""
-        # Extract content and metadata based on response type
+        """Process assistant response and handle tool use and mode switching recursively"""
         content = assistant_message.content
 
-        if not contains_tool_use(content):
+        # First, handle tool use if present
+        if contains_tool_use(content):
+            plain_content, tool_content = split_content(content)
+
+            mcp_tool = self.mcp_manager.extract_mcp_tool_use(tool_content)
+            if not mcp_tool:
+                # If it contains tool use but not a valid MCP tool, just append and return
+                self.messages.append(assistant_message)
+                self.display_manager.display_message_panel(assistant_message, index=len(self.messages) - 1)
+                return
+
+            server_name, tool_name, arguments = mcp_tool
+            assistant_message.server = server_name
+            assistant_message.tool = tool_name
+            assistant_message.arguments = arguments
+            assistant_message.content = plain_content # Update content to plain content
+
+            self.messages.append(assistant_message)
+            self.display_manager.display_message_panel(assistant_message, index=len(self.messages) - 1)
+
+            if not self.get_user_confirmation(tool_content, server_name, tool_name):
+                no_exec_msg = "Tool execution cancelled by user."
+                self.display_manager.console.print(f"\n[yellow]{no_exec_msg}[/yellow]")
+                user_message = create_message("user", no_exec_msg)
+                self.messages.append(user_message)
+                return
+
+            tool_results = await self.mcp_manager.execute_tool(server_name, tool_name, arguments)
+            
+            # After tool execution, the result needs to go to the plan agent.
+            # So, switch to plan mode and then feed the tool results as a user message.
+            self.display_manager.console.print(f"\n[blue]Tool Execution Result:[/blue]")
+            self.display_manager.console.print(f"[blue]  Tool: {tool_name}[/blue]")
+            self.display_manager.console.print(f"[blue]  Result: {tool_results}[/blue]")
+
+            # Switch to plan mode
+            self.set_mode("plan")
+
+            # Create a user message for the plan agent with the tool results
+            # This message will be appended to plan_messages because mode is now "plan"
+            plan_agent_update = create_message("user", json.dumps({
+                "action": "tool_execution_feedback", # New action for plan agent
+                "tool_name": tool_name,
+                "tool_arguments": arguments,
+                "tool_results": tool_results
+            }))
+            await self.process_user_message(plan_agent_update) # Update plan agent
+            return # Tool use handled, return
+
+        # If no tool use, check for mode switching directives based on JSON output
+        try:
+            parsed_content = json.loads(content)
+        except json.JSONDecodeError:
+            # If not JSON, just append the message and return
             self.messages.append(assistant_message)
             self.display_manager.display_message_panel(assistant_message, index=len(self.messages) - 1)
             return
 
-        # Handle response with tool use
-        plain_content, tool_content = split_content(content)
+        if self.current_mode == "plan" and "execution_plan" in parsed_content:
+            ongoing_step = None
+            for step in parsed_content["execution_plan"]["steps"]:
+                if step.get("status") == "ongoing":
+                    ongoing_step = step
+                    break
 
-        # Extract MCP tool info before updating content
-        mcp_tool = self.mcp_manager.extract_mcp_tool_use(tool_content)
-        if not mcp_tool:
-            return
-        server_name, tool_name, arguments = mcp_tool
-        # Add server, tool, and arguments info to assistant message
-        assistant_message.server = server_name
-        assistant_message.tool = tool_name
-        assistant_message.arguments = arguments
+            if ongoing_step:
+                action_description = ongoing_step.get("action_description", "No description")
+                tool_info = ongoing_step.get("tool", {})
+                tool_name = tool_info.get("name", "unknown_tool")
+                tool_purpose = tool_info.get("purpose", "no purpose specified")
+                input_requirements = tool_info.get("input_requirements", [])
 
-        # Update last assistant message with plain content
-        assistant_message.content = plain_content
+                self.display_manager.console.print(f"\n[blue]Plan Agent: Identified Ongoing Step:[/blue]")
+                self.display_manager.console.print(f"[blue]  Description: {action_description}[/blue]")
+                self.display_manager.console.print(f"[blue]  Tool: {tool_name} ({tool_purpose})[/blue]")
+                self.display_manager.console.print(f"[blue]  Input Requirements: {input_requirements}[/blue]")
+
+                # Append the plan agent's full message to its history
+                self.messages.append(assistant_message)
+                self.display_manager.display_message_panel(assistant_message, index=len(self.messages) - 1)
+
+                # Switch to act mode
+                self.set_mode("act")
+
+                # Create a new user message for the act agent with the extracted step details
+                act_agent_instruction = create_message("user", json.dumps({
+                    "action": "execute_step",
+                    "description": action_description,
+                    "tool": tool_info,
+                    "input_requirements": input_requirements
+                }))
+                await self.process_user_message(act_agent_instruction) # Initiate act agent's turn
+                return
+
+
+        # If no tool use and no recognized JSON directives, just append the message
         self.messages.append(assistant_message)
         self.display_manager.display_message_panel(assistant_message, index=len(self.messages) - 1)
 
-        # Get user confirmation for tool execution
-        if not self.get_user_confirmation(tool_content, server_name, tool_name):
-            no_exec_msg = "Tool execution cancelled by user."
-            self.display_manager.console.print(f"\n[yellow]{no_exec_msg}[/yellow]")
-            user_message = create_message("user", no_exec_msg)
-            self.messages.append(user_message)
-            return
-
-        # Execute tool and get results
-        tool_results = await self.mcp_manager.execute_tool(server_name, tool_name, arguments)
-
-        # Create user message with tool results and include tool info
-        user_message = create_message("user", tool_results, server=server_name, tool=tool_name, arguments=arguments)
-
-        # Process user message and assistant response recursively
-        await self.process_user_message(user_message)
-
     async def persist_chat(self):
         """Persist current chat state"""
+        # Combine plan and act messages for persistence
+        all_messages = sorted(self.plan_messages + self.act_messages, key=lambda m: m.unix_timestamp)
+
         if not self.current_chat:
             # Create new chat with pre-generated ID
-            self.current_chat = await self.service.create_chat(self.messages, self.external_id, self.chat_id)
+            self.current_chat = await self.service.create_chat(all_messages, self.external_id, self.chat_id)
         else:
             # Update existing chat - external_id will be preserved automatically
-            self.current_chat = await self.service.update_chat(self.current_chat.id, self.messages, self.external_id)
+            self.current_chat = await self.service.update_chat(self.current_chat.id, all_messages, self.external_id)
 
     async def run(self):
         """Run the chat session"""
