@@ -103,3 +103,4 @@ or
     "error_message": "Invalid input parameter format"
   }
 }
+- Only the execution status of the tool is returned, and the returned results try to contain only the result of whether the mcp tool call was successful or not, with the purpose of allowing the plan model to get whether the STEP was executed correctly, and thus update the plan.
