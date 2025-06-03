@@ -140,7 +140,7 @@ Example format:
 - Long videos require iterative generation and merging
 - Style consistency requires careful reference management
 - Object tracking across segments needs explicit coordination
-- Complex narratives benefit from storyboard planning
+- Complex narratives benefit from storyboard planning. Do not directly generate content such as scripts for content that cannot be directly generated in a single step. Instead, call storyboard_generate first to initialize the detailed script and the character's visual appearance information.
 
 ## Planning Updates:
 
